@@ -19,7 +19,17 @@ struct EnumWindowsCallbackArgs {
 	std::vector<HWND> handles;
 };
 
-char ini_path[MAX_PATH] = { 0 };
+char   dll_path[MAX_PATH] = { 0 };
+size_t dll_path_size      = 0;
+
+char   dll_name[MAX_PATH] = { 0 };
+size_t dll_name_size      = 0;
+
+char   ini_path[MAX_PATH] = { 0 };
+size_t ini_path_size      = 0;
+
+char   ini_name[MAX_PATH] = { 0 };
+size_t ini_name_size      = 0;
 
 void show_message(const char* function, unsigned int line, const char* message, UINT type)
 {
@@ -106,7 +116,7 @@ void get_module_section_for_address(LONG64* out_executable_address, LONG64* out_
 	}
 }
 
-void get_executable_image_data(LONG64* out_executable_address, LONG64* out_executable_size, LPCSTR module_name = NULL)
+void get_module_image_data(LONG64* out_executable_address, LONG64* out_executable_size, LPCSTR module_name = NULL)
 {
 	*out_executable_address = 0;
 	*out_executable_size = 0;
@@ -247,7 +257,7 @@ void write_memory(LONG64 address, char* buf, LONG64 size)
 	}
 }
 
-DWORD get_executable_path(LPSTR out_path, LPCSTR module_name = NULL) {
+DWORD get_module_path(LPSTR out_path, LPCSTR module_name = NULL) {
 	HMODULE h_mod = GetModuleHandleA(module_name);
 
 	if (h_mod == NULL)
@@ -258,32 +268,99 @@ DWORD get_executable_path(LPSTR out_path, LPCSTR module_name = NULL) {
 	return GetModuleFileNameA(h_mod, out_path, MAX_PATH);
 }
 
+bool change_path_extension(char* src, size_t src_size, char* new_extension, char* dst)
+{
+	size_t new_extension_size = strlen(new_extension);
+
+	if (src_size < new_extension_size)
+	{
+		return false;
+	}
+
+	memcpy(dst, src, src_size);
+
+	for (size_t i = 1; i <= new_extension_size; ++i)
+	{
+		dst[src_size - i] = new_extension[new_extension_size - i];
+	}
+
+	return true;
+}
+
+void extract_file_name_data(char* src, char* out_file_name, size_t* out_file_name_size)
+{
+	*out_file_name_size = 0;
+
+	size_t src_size = strlen(src);
+
+	for (size_t i = src_size - 1; i >= 0; --i)
+	{
+		if (src[i] != '\\')
+		{
+			continue;
+		}
+
+		*out_file_name_size = src_size - i - 1;
+
+		break;
+	}
+
+	for (size_t i = 0; i < *out_file_name_size; ++i)
+	{
+		out_file_name[i] = src[src_size - *out_file_name_size + i];
+	}
+
+	out_file_name[*out_file_name_size] = '\0';
+}
+
+bool init_dll(void)
+{
+	if (dll_path[0] != '\0')
+	{
+		return true;
+	}
+
+	HMODULE h_mod = NULL;
+
+	if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)&init_dll, &h_mod) == 0)
+	{
+		SHOW_ERROR("Could not get module handle for DLL");
+
+		return false;
+	}
+
+	if (GetModuleFileNameA(h_mod, dll_path, sizeof(dll_path)) == 0)
+	{
+		SHOW_ERROR("Could not get module filename for DLL");
+
+		return false;
+	}
+
+	dll_path_size = strlen(dll_path);
+
+	extract_file_name_data(dll_path, dll_name, &dll_name_size);
+
+	return true;
+}
+
 bool init_ini(void)
 {
-	if (ini_path[0] == '\0')
+	if (!init_dll())
 	{
-		HMODULE h_mod = NULL;
-
-		if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)&init_ini, &h_mod) == 0)
-		{
-			SHOW_ERROR("Could not get module handle for DLL");
-
-			return false;
-		}
-
-		if (GetModuleFileNameA(h_mod, ini_path, sizeof(ini_path)) == 0)
-		{
-			SHOW_ERROR("Could not get module filename for DLL");
-
-			return false;
-		}
-
-		size_t ini_path_size = strlen(ini_path);
-
-		ini_path[ini_path_size - 3] = 'i';
-		ini_path[ini_path_size - 2] = 'n';
-		ini_path[ini_path_size - 1] = 'i';
+		return false;
 	}
+
+	if (ini_path[0] != '\0')
+	{
+		return true;
+	}
+
+	if (!change_path_extension(dll_path, dll_path_size, "ini", ini_path))
+	{
+		return false;
+	}
+
+	extract_file_name_data(ini_path, ini_name, &ini_name_size);
 
 	return true;
 }
@@ -302,6 +379,8 @@ int read_ini_str(const char* section, const char* key, const char* default_value
 {
 	if (!init_ini())
 	{
+		strcpy(out_string, default_value);
+
 		return -1;
 	}
 
@@ -323,21 +402,26 @@ static BOOL CALLBACK EnumWindowsCallback(HWND hnd, LPARAM lParam)
     return TRUE;
 }
 
-HWND get_toplevel_window()
+std::vector<HWND> get_toplevel_windows()
 {
     EnumWindowsCallbackArgs args(GetCurrentProcessId());
 
     if (EnumWindows(&EnumWindowsCallback, (LPARAM)&args) == FALSE)
 		{
-      return NULL;
+      return std::vector<HWND>();
     }
 
-		std::vector<HWND> handles = args.handles;
+    return args.handles;
+}
 
-		if (handles.size() == 0)
-		{
-			return NULL;
-		}
+HWND get_toplevel_window()
+{
+	std::vector<HWND> handles = get_toplevel_windows();
 
-    return handles[0];
+	if (handles.size() == 0)
+	{
+		return NULL;
+	}
+
+	return handles[0];
 }
