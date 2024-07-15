@@ -75,3 +75,13 @@ timeBeforeResume=60000
 ```
 
 This configuration will let the protection run for 30 seconds and pause it for 1 minute
+
+## Debug
+
+There are some debugger flags in the INI file, so you can see what is going on. Maybe more will be added in the future (maybe not)
+
+## TODO
+
+- Research Anybrain's network traffic. Until now we only know that it skips `/etc/hosts` file to resolve their server's name
+- Research if we can just skip the data collection instead of pausing/resuming the entire protection
+- Test it a lot
